@@ -2,6 +2,7 @@ import { config, SPECIES } from "./config.js";
 import { logger } from "./logger.js";
 
 const BASE = config.site.baseUrl.replace(/\/$/, "");
+const BASE_ORIGIN = new URL(BASE).origin; // e.g. https://geckodaily.vercel.app
 
 async function getJSON(url) {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
@@ -26,6 +27,43 @@ export async function getSiteIndex(slug) {
   return getJSON(`${BASE}/${slug}/api/plugin/site`);
 }
 
+/**
+ * Builds a link that is ALWAYS on the one real site (config.site.baseUrl /
+ * BASE_ORIGIN), no matter what domain the API's own pageLink/href field
+ * says. This is the fix for the bot posting dead/retired per-table
+ * subdomains (crestytable.vercel.app etc.) — those fields are only ever
+ * used for their PATH, never their host.
+ *
+ * Returns null (meaning "drop this item, don't post it") if:
+ *  - there's no usable candidate URL/path at all, or
+ *  - the resulting path doesn't live under /{slug}/..., which is the
+ *    shape every real GeckoDaily page has. A path that doesn't match that
+ *    shape is far more likely to be stale/garbage data from the API than
+ *    a real page, so we skip it rather than gamble on posting it.
+ */
+function canonicalPageUrl(candidate, { slug, fallbackPath }) {
+  let target;
+  try {
+    // Resolves both absolute URLs (any domain) and relative paths against
+    // BASE_ORIGIN — either way we only keep pathname + search below.
+    target = new URL(candidate || fallbackPath, BASE_ORIGIN);
+  } catch {
+    try {
+      target = new URL(fallbackPath, BASE_ORIGIN);
+    } catch {
+      return null;
+    }
+  }
+
+  const path = `${target.pathname}${target.search}`;
+  if (!new RegExp(`^/${slug}(/|$)`, "i").test(target.pathname)) {
+    logger.warn(`Dropping item for ${slug}: link path "${target.pathname}" isn't under /${slug}/ — likely stale API data.`);
+    return null;
+  }
+
+  return { url: `${BASE_ORIGIN}${path}`, label: `${BASE_ORIGIN.replace(/^https?:\/\//, "")}${target.pathname}` };
+}
+
 function withUtm(url, { campaign, contentId }) {
   const u = new URL(url);
   u.searchParams.set("utm_source", "bluesky");
@@ -35,14 +73,54 @@ function withUtm(url, { campaign, contentId }) {
   return u.toString();
 }
 
+// In-run cache: HEAD-check a given URL at most once per batch run, and
+// reuse the result for every item that happens to share that page link.
+const linkCheckCache = new Map();
+const LINK_CHECK_TIMEOUT_MS = 6000;
+
+/**
+ * Confirms a page actually resolves (2xx/3xx) before we let the bot post
+ * it. Falls back to GET if the host rejects HEAD (some hosts do). Treats
+ * network errors/timeouts as "unreachable" — safer to skip a post than to
+ * publish a dead link.
+ */
+export async function verifyLinkLive(url) {
+  if (linkCheckCache.has(url)) return linkCheckCache.get(url);
+
+  const check = async (method) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LINK_CHECK_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { method, redirect: "follow", signal: controller.signal });
+      return res.ok || (res.status >= 300 && res.status < 400);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let ok;
+  try {
+    ok = await check("HEAD");
+  } catch {
+    try {
+      ok = await check("GET");
+    } catch (err) {
+      logger.warn(`Link check failed for ${url}: ${err.message}`);
+      ok = false;
+    }
+  }
+
+  linkCheckCache.set(url, ok);
+  return ok;
+}
+
 /**
  * Builds a normalized pool of postable "items" for one species by hitting
- * every plugin endpoint that species exposes. Each item carries enough
- * source material for the AI to rewrite, a stable id (for the
+ * every plugin endpoint that species exposes. Each item carries the short
+ * "quick answer" text that's already on the site (no AI rewriting — we
+ * post the source claim/summary as-is), a stable id (for the
  * never-repeat-too-soon log), and a UTM-tagged deep link back to the
- * exact page that content lives on (not just the homepage — this spreads
- * inbound clicks across the whole site instead of dumping them all on `/`,
- * which is both better for visitors and better for internal-page SEO signal).
+ * exact page that content lives on, always on the real domain.
  */
 export async function buildItemPool(species) {
   const { slug } = species;
@@ -60,29 +138,33 @@ export async function buildItemPool(species) {
   if (factsR.status === "fulfilled") {
     const { facts = [], morphs = [] } = factsR.value;
     for (const f of facts) {
+      if (!f.claim) continue; // the "quick answer" — skip anything that doesn't have one
+      const link = canonicalPageUrl(f.pageLink, { slug, fallbackPath: `/${slug}/knowyou` });
+      if (!link) continue;
       items.push({
         type: "fact",
         species,
         id: `fact:${slug}:${f.id}`,
         category: f.category,
-        sourceText: [f.claim, f.detail].filter(Boolean).join(" "),
-        pageUrl: withUtm(`${BASE}/${slug}/knowyou`, { campaign: "fact", contentId: f.id }),
-        pageLabel: `geckodaily.vercel.app/${slug}/knowyou`,
+        quickAnswer: f.claim,
+        pageUrl: withUtm(link.url, { campaign: "fact", contentId: f.id }),
+        pageLabel: link.label,
       });
     }
     for (const m of morphs) {
-      // Morph objects vary slightly by species; be defensive about field names.
       const label = m.name || m.morph || "morph";
       const desc = m.description || m.detail || m.notes || "";
       if (!desc) continue;
+      const link = canonicalPageUrl(m.pageLink, { slug, fallbackPath: `/${slug}/knowyou` });
+      if (!link) continue;
       items.push({
         type: "morph",
         species,
         id: `morph:${slug}:${label}`,
         category: "morphs",
-        sourceText: `${label}: ${desc}`,
-        pageUrl: withUtm(`${BASE}/${slug}/knowyou`, { campaign: "morph", contentId: label }),
-        pageLabel: `geckodaily.vercel.app/${slug}/knowyou`,
+        quickAnswer: `${label}: ${desc}`,
+        pageUrl: withUtm(link.url, { campaign: "morph", contentId: label }),
+        pageLabel: link.label,
       });
     }
   } else {
@@ -92,18 +174,17 @@ export async function buildItemPool(species) {
   if (careR.status === "fulfilled") {
     const guides = careR.value.guides || [];
     for (const g of guides) {
-      const points = (g.keyPoints || []).slice(0, 3).join(" | ");
+      if (!g.summary) continue; // the quick answer for a care topic
+      const link = canonicalPageUrl(g.pageLink, { slug, fallbackPath: `/${slug}/${g.topic}` });
+      if (!link) continue;
       items.push({
         type: "care",
         species,
         id: `care:${slug}:${g.topic}`,
         category: g.topic,
-        sourceText: `${g.summary} Key points: ${points}`,
-        pageUrl: withUtm(g.pageLink || `${BASE}/${slug}/${g.topic}`, {
-          campaign: "care",
-          contentId: g.topic,
-        }),
-        pageLabel: `geckodaily.vercel.app/${slug}/${g.topic}`,
+        quickAnswer: g.summary,
+        pageUrl: withUtm(link.url, { campaign: "care", contentId: g.topic }),
+        pageLabel: link.label,
       });
     }
   } else {
@@ -115,18 +196,16 @@ export async function buildItemPool(species) {
     for (const p of plants) {
       const name = p.name || p.commonName;
       if (!name) continue;
-      const note = p.notes || p.note || p.description || "";
+      const link = canonicalPageUrl(plantsR.value.pageLink, { slug, fallbackPath: `/${slug}/plants` });
+      if (!link) continue;
       items.push({
         type: "plant",
         species,
         id: `plant:${slug}:${name}`,
         category: `plant-${p.safety}`,
-        sourceText: `${name} is rated "${p.safety}" for a ${species.common} enclosure. ${note}`,
-        pageUrl: withUtm(plantsR.value.pageLink || `${BASE}/${slug}/plants`, {
-          campaign: "plant",
-          contentId: name,
-        }),
-        pageLabel: `geckodaily.vercel.app/${slug}/plants`,
+        quickAnswer: `${name} is rated "${p.safety}" for a ${species.common} enclosure.`,
+        pageUrl: withUtm(link.url, { campaign: "plant", contentId: name }),
+        pageLabel: link.label,
       });
     }
   } else {
@@ -138,18 +217,16 @@ export async function buildItemPool(species) {
     for (const f of feeders) {
       const name = f.name || f.insect;
       if (!name) continue;
-      const note = f.notes || f.note || "";
+      const link = canonicalPageUrl(feedersR.value.pageLink, { slug, fallbackPath: `/${slug}/food` });
+      if (!link) continue;
       items.push({
         type: "feeder",
         species,
         id: `feeder:${slug}:${name}`,
         category: `feeder-${f.tier}`,
-        sourceText: `${name} (${f.tier} tier feeder for ${species.common}). ${note}`,
-        pageUrl: withUtm(feedersR.value.pageLink || `${BASE}/${slug}/food`, {
-          campaign: "feeder",
-          contentId: name,
-        }),
-        pageLabel: `geckodaily.vercel.app/${slug}/food`,
+        quickAnswer: `${name} — ${f.tier} tier feeder for ${species.common}.`,
+        pageUrl: withUtm(link.url, { campaign: "feeder", contentId: name }),
+        pageLabel: link.label,
       });
     }
   } else {
@@ -161,14 +238,17 @@ export async function buildItemPool(species) {
     for (const group of sections) {
       if (group.group === "Plugin API") continue; // not interesting to a human reader
       for (const item of group.items || []) {
+        if (!item.description) continue;
+        const link = canonicalPageUrl(item.href, { slug, fallbackPath: `/${slug}` });
+        if (!link) continue;
         items.push({
           type: "section",
           species,
           id: `section:${slug}:${item.label}`,
           category: group.group,
-          sourceText: `${item.label}: ${item.description}`,
-          pageUrl: withUtm(item.href, { campaign: "section", contentId: item.label }),
-          pageLabel: item.href.replace(/^https?:\/\//, "").split("?")[0],
+          quickAnswer: item.description,
+          pageUrl: withUtm(link.url, { campaign: "section", contentId: item.label }),
+          pageLabel: link.label,
         });
       }
     }

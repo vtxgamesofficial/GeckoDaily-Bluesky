@@ -1,0 +1,48 @@
+name: GeckoDaily Bluesky bot — DELETE ALL POSTS
+
+# Manual trigger ONLY. This is irreversible — it deletes every post
+# currently on the bot's Bluesky account. Never on a schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DELETE (all caps) to actually delete every post. Anything else runs a dry preview only.'
+        required: true
+        default: 'preview'
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    environment: geckodaily
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install
+
+      - name: Delete all posts (or preview)
+        env:
+          BLUESKY_IDENTIFIER: ${{ secrets.BLUESKY_IDENTIFIER }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" = "DELETE" ]; then
+            echo "Confirmed — deleting every post on the account."
+            node index.js --purge-all-posts --yes-delete-everything
+          else
+            echo "Confirmation text was not exactly DELETE — running a dry preview instead. Nothing will be deleted."
+            node index.js --purge-all-posts --dry
+          fi
+
+      # Only relevant when posts were actually deleted (deleteAllPosts.js
+      # resets state.json in that case) — no-op otherwise.
+      - name: Commit reset state
+        if: always()
+        run: |
+          git config user.name "geckodaily-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/state.json
+          git diff --cached --quiet || git commit -m "chore: reset bot state after purge [skip ci]"
+          git push

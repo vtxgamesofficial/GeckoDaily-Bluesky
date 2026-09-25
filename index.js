@@ -1,6 +1,7 @@
 import { postOnce, postBatch } from "./src/postOnce.js";
 import { engageOnce } from "./src/engagement.js";
 import { startScheduler } from "./src/scheduler.js";
+import { deleteAllPosts } from "./src/deleteAllPosts.js";
 import { logger } from "./src/logger.js";
 
 // Hardcoded here on purpose (per request) instead of an env var/secret —
@@ -8,7 +9,7 @@ import { logger } from "./src/logger.js";
 // Change these two numbers directly if you ever want a different pace;
 // no GitHub secret needed.
 const DAILY_POST_COUNT = 450;
-const DAILY_INTERVAL_SEC = 5; // gap between posts within the batch
+const DAILY_INTERVAL_SEC = 7; // gap between posts within the batch
 
 const args = process.argv.slice(2);
 const dry = args.includes("--dry");
@@ -37,19 +38,38 @@ Usage:
   node index.js --once --loop=50               Post 50 items, fetching the content pool ONCE (efficient batch mode)
   node index.js --daily                        Post ${DAILY_POST_COUNT} items today (hardcoded count/interval, see top of index.js)
   node index.js --daily --dry                   Preview what a full daily batch would post, no Bluesky needed
+  node index.js --purge-all-posts --dry         Preview EVERY post currently on the account (no deletes)
+  node index.js --purge-all-posts --yes-delete-everything
+                                                 Actually delete every post on the account. Irreversible.
   node index.js --engage                      Run one engagement (safe-liking) pass
   node index.js --engage --dry                Show what the engagement pass would search for
   node index.js --schedule                    Run forever, posting/engaging on a fixed cron schedule instead of a loop
 
-Note: --dry mode never contacts Bluesky at all — it only needs
-CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN in .env, so you can preview
-posts on a loop before you've even set up a Bluesky app password.
+Note: --dry mode never contacts Bluesky at all, so you can preview posts
+on a loop before you've even set up a Bluesky app password. It still
+fetches live content + checks links, so it needs network access.
 
 Config lives in .env — see .env.example.
 `);
 }
 
 async function main() {
+  if (args.includes("--purge-all-posts")) {
+    // Deliberately requires a separate explicit flag, not just --purge-all-posts
+    // alone, so this can never fire by accident from a mistyped/copy-pasted
+    // command. Irreversible — deletes every post on the account.
+    if (!args.includes("--yes-delete-everything")) {
+      logger.error(
+        "Refusing to run: pass BOTH --purge-all-posts --yes-delete-everything to actually delete every post on this account (or add --dry to preview first)."
+      );
+      process.exitCode = 1;
+      return;
+    }
+    const { total, deleted, failed } = await deleteAllPosts({ dry });
+    logger.info(`Purge finished. total=${total} deleted=${deleted} failed=${failed}`);
+    return;
+  }
+
   if (args.includes("--daily")) {
     const { postedCount, failedCount } = await postBatch({
       count: DAILY_POST_COUNT,

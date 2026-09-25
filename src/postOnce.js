@@ -1,4 +1,4 @@
-import { buildAllPools } from "./contentSource.js";
+import { buildAllPools, verifyLinkLive } from "./contentSource.js";
 import { loadState, saveState, markPosted, isNearDuplicate } from "./state.js";
 import { selectItem } from "./selectItem.js";
 import { composeBody, pickHashtags } from "./composer.js";
@@ -19,21 +19,32 @@ function sleep(ms) {
  * it whenever it wants (every post, every N posts, or once at the end).
  */
 async function postOneFromPools(pools, state, { dry = false } = {}) {
-  const MAX_ITEM_ATTEMPTS = 4;
+  const MAX_ITEM_ATTEMPTS = 6;
   for (let i = 0; i < MAX_ITEM_ATTEMPTS; i++) {
     const item = selectItem(pools, state);
     if (!item) return { posted: false, reason: "no item selectable" };
 
+    // Confirm the page this item links to actually resolves BEFORE we
+    // spend anything else on it. Catches stale/garbage links that made it
+    // past the domain/path sanity check in contentSource.js (e.g. a path
+    // that matches /{slug}/... shape but the specific page was removed).
+    const linkLive = await verifyLinkLive(item.pageUrl);
+    if (!linkLive) {
+      logger.warn(`Skipping item ${item.id} — link did not resolve: ${item.pageUrl}`);
+      markPosted(state, item.id, ""); // don't keep retrying the same dead link
+      continue;
+    }
+
     logger.info(`Attempting item ${item.id} (${item.type}/${item.category}) for ${item.species.slug}`);
-    const result = await composeBody(item);
+    const result = composeBody(item);
     if (!result.ok) {
-      logger.warn(`Composer rejected item ${item.id}: ${result.reason}. Trying another item.`);
+      logger.warn(`Rejected item ${item.id}: ${result.reason}. Trying another item.`);
       markPosted(state, item.id, "");
       continue;
     }
 
     if (isNearDuplicate(state, result.text)) {
-      logger.warn(`Composed text for ${item.id} is a near-duplicate of a recent post. Trying another item.`);
+      logger.warn(`Text for ${item.id} is a near-duplicate of a recent post. Trying another item.`);
       continue;
     }
 
