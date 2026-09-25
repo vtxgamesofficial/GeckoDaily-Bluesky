@@ -1,7 +1,14 @@
-import { postOnce } from "./src/postOnce.js";
+import { postOnce, postBatch } from "./src/postOnce.js";
 import { engageOnce } from "./src/engagement.js";
 import { startScheduler } from "./src/scheduler.js";
 import { logger } from "./src/logger.js";
+
+// Hardcoded here on purpose (per request) instead of an env var/secret —
+// this is the ONE place that controls the daily volume for `--daily`.
+// Change these two numbers directly if you ever want a different pace;
+// no GitHub secret needed.
+const DAILY_POST_COUNT = 450;
+const DAILY_INTERVAL_SEC = 5; // gap between posts within the batch
 
 const args = process.argv.slice(2);
 const dry = args.includes("--dry");
@@ -19,10 +26,6 @@ function getFlagValue(name, fallback) {
 const loopCount = getFlagValue("loop", 1);
 const intervalSec = getFlagValue("interval", 5);
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function printHelp() {
   console.log(`
 GeckoDaily Bluesky bot
@@ -31,9 +34,9 @@ Usage:
   node index.js --once                        Post one item now
   node index.js --once --dry                  Compose + validate a post but don't publish it
   node index.js --once --dry --loop=10        Preview 10 posts back-to-back, no Bluesky needed
-  node index.js --once --dry --loop=forever   Keep previewing posts until you Ctrl+C
-  node index.js --once --loop=forever         Actually post over and over, forever (needs Bluesky creds)
-  node index.js --loop=5 --interval=30 --once Repeat 5 times, 30s apart (default interval: 5s)
+  node index.js --once --loop=50               Post 50 items, fetching the content pool ONCE (efficient batch mode)
+  node index.js --daily                        Post ${DAILY_POST_COUNT} items today (hardcoded count/interval, see top of index.js)
+  node index.js --daily --dry                   Preview what a full daily batch would post, no Bluesky needed
   node index.js --engage                      Run one engagement (safe-liking) pass
   node index.js --engage --dry                Show what the engagement pass would search for
   node index.js --schedule                    Run forever, posting/engaging on a fixed cron schedule instead of a loop
@@ -47,17 +50,36 @@ Config lives in .env — see .env.example.
 }
 
 async function main() {
+  if (args.includes("--daily")) {
+    const { postedCount, failedCount } = await postBatch({
+      count: DAILY_POST_COUNT,
+      intervalSec: DAILY_INTERVAL_SEC,
+      dry,
+    });
+    if (postedCount === 0 && !dry) {
+      logger.error("Daily batch posted nothing.");
+      process.exitCode = 1;
+    }
+    logger.info(`Daily batch done: ${postedCount} posted, ${failedCount} failed/skipped.`);
+    return;
+  }
+
   if (args.includes("--once")) {
-    for (let i = 0; loopCount === Infinity || i < loopCount; i++) {
-      if (loopCount !== 1) logger.info(`--- run ${i + 1}${loopCount === Infinity ? "" : `/${loopCount}`} ---`);
+    if (loopCount === 1) {
       const result = await postOnce({ dry });
       if (!result.posted) {
         logger.error("Run finished without posting:", result.reason);
-        if (loopCount === 1) process.exitCode = 1;
+        process.exitCode = 1;
       }
-      const isLast = loopCount !== Infinity && i === loopCount - 1;
-      if (!isLast) await sleep(intervalSec * 1000);
+      return;
     }
+    // loopCount > 1 (or "forever"): use the batch path so the content pool
+    // is fetched once and reused, instead of re-fetching it before every post.
+    await postBatch({
+      count: loopCount === Infinity ? Number.MAX_SAFE_INTEGER : loopCount,
+      intervalSec,
+      dry,
+    });
     return;
   }
 

@@ -80,8 +80,25 @@ Two options — pick one:
 
 ### Option A: GitHub Actions (recommended — free, no server to manage)
 
-A workflow is already included at `.github/workflows/post.yml`, scheduled
-for 09:00 / 14:00 / 19:00 UTC.
+A workflow is already included at `.github/workflows/post.yml`. It runs
+**once a day** (09:00 UTC by default) and posts a whole day's batch of
+**450 posts back-to-back**, ~5 seconds apart, reusing one fetch of the
+content pool for the whole batch (instead of re-fetching it 450 times).
+The count (`450`) and the gap between posts (`5` seconds) are hardcoded as
+`DAILY_POST_COUNT` / `DAILY_INTERVAL_SEC` at the top of `index.js` — edit
+those two numbers directly if you want a different pace; no extra GitHub
+secret is needed for them.
+
+⚠️ **450 posts/day is extremely high volume** (about one every 3 minutes,
+24/7) and is well outside what this bot was originally designed for — see
+[Why no auto-reply / auto-follow](#why-no-auto-reply--auto-follow) above
+for the spam-pattern reasoning that originally kept volume low. At this
+pace, expect: Bluesky's spam/abuse detection may rate-limit, label, or
+suspend the account regardless of content quality; your Cloudflare
+Workers AI usage will be ~900 calls/day (2 per post) which may exceed a
+free-tier daily quota; and the live content pool per species is finite,
+so many posts each day will necessarily repeat facts already used earlier
+that day.
 
 1. Push this folder to its own GitHub repo.
 2. Repo **Settings → Secrets and variables → Actions**, add:
@@ -92,8 +109,12 @@ for 09:00 / 14:00 / 19:00 UTC.
    back to the repo after each run so the bot remembers what it already
    posted — Actions runners are wiped between runs otherwise).
 4. That's it. Trigger it once manually from the **Actions** tab
-   ("Run workflow") to confirm it works, or just wait for the schedule.
-5. Edit the `cron:` line in the workflow file to change post times.
+   ("Run workflow") to confirm it works — this will post the full 450-item
+   batch, so make sure that's what you want before clicking it — or just
+   wait for the schedule.
+5. Edit the `cron:` line in the workflow file to change what time the
+   daily batch starts, and `DAILY_POST_COUNT` / `DAILY_INTERVAL_SEC` at
+   the top of `index.js` to change how many posts and how fast.
 
 ### Option B: A long-running Node process (VPS, Railway, Render, etc.)
 
