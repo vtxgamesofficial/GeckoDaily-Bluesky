@@ -1,0 +1,42 @@
+name: GeckoDaily Bluesky bot
+
+on:
+  schedule:
+    # 09:00, 14:00, 19:00 UTC daily. Edit to taste — this is independent of
+    # POST_CRON in .env, which only applies to the long-running `--schedule`
+    # mode. When running via Actions, THIS is the schedule that matters.
+    - cron: "0 9,14,19 * * *"
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install
+
+      - name: Post to Bluesky
+        env:
+          BLUESKY_IDENTIFIER: ${{ secrets.BLUESKY_IDENTIFIER }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SITE_BASE_URL: https://geckodaily.vercel.app
+        run: node index.js --once
+
+      # Persist data/state.json (posted-item log) back to the repo so the
+      # bot remembers what it already posted between runs. Actions runners
+      # are ephemeral — without this, the bot would forget its history
+      # every single run and could repeat itself.
+      - name: Commit updated state
+        run: |
+          git config user.name "geckodaily-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/state.json
+          git diff --cached --quiet || git commit -m "chore: update bot state [skip ci]"
+          git push

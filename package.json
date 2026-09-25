@@ -1,0 +1,21 @@
+{
+  "name": "geckodaily-bluesky-bot",
+  "version": "1.0.0",
+  "description": "Bluesky bot for GeckoDaily (geckodaily.vercel.app) — posts AI-rewritten gecko facts/care tips pulled live from the site's own plugin API, drives traffic + backlinks back to it.",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "post": "node index.js --once",
+    "post:dry": "node index.js --once --dry",
+    "engage": "node index.js --engage",
+    "engage:dry": "node index.js --engage --dry",
+    "schedule": "node index.js --schedule"
+  },
+  "dependencies": {
+    "@atproto/api": "^0.13.18",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+.env
+*.log
+
+# NOTE: data/state.json is intentionally NOT ignored.
+# If you deploy via the GitHub Actions workflow (.github/workflows/post.yml),
+# the bot commits its own state file back to the repo after each run so it
+# remembers what it already posted — ignoring it would make the bot repeat
+# itself every run since Actions runners are wiped between jobs. If you
+# instead run the bot on a long-lived server (VPS, Railway, etc.) via
+# `npm run schedule`, state.json just lives on disk there and never needs
+# to be committed — feel free to re-add it to this file in that case.
