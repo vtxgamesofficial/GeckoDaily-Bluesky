@@ -11,6 +11,10 @@ on:
 jobs:
   post:
     runs-on: ubuntu-latest
+    # Pulls in the secrets you added under this named Environment
+    # (Settings → Environments → geckodaily). If you ever move the 4
+    # secrets to plain repository secrets instead, you can delete this line.
+    environment: geckodaily
     steps:
       - uses: actions/checkout@v4
 
