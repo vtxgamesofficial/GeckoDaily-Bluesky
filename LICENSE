@@ -1,0 +1,62 @@
+# GeckoDaily Source Code License
+
+Copyright © 2026 GeckoDaily. All rights reserved.
+
+## 1. Permission to View
+
+You are permitted to access, view, and read this source code for the purposes of learning, education, research, and understanding how the project works.
+
+## 2. No Use of Source Code
+
+You may **not** use this source code, in whole or in part, in your own projects.
+
+This includes, but is not limited to:
+
+* Copying any source code or portions of source code
+* Using the source code in another project
+* Modifying or adapting the source code
+* Forking this repository for development or deployment
+* Reusing functions, components, algorithms, structures, or other implementation details from this source code
+* Copying the project's assets, designs, or other protected materials
+* Deploying or hosting a copy of this project
+* Redistributing the source code or modified versions of it
+* Selling or commercially using any part of the source code
+* Claiming any part of this source code as your own
+
+## 3. Independent Projects
+
+You may create your own project that provides similar functionality or is inspired by the general ideas you learn from viewing this project.
+
+However, your project must be **independently written from scratch** and must not contain copied, adapted, or derived code from this repository.
+
+You may use general programming concepts and knowledge gained from studying the project, but you must implement your own code independently.
+
+## 4. No License to Copy
+
+Viewing this repository does not grant you a license to copy, modify, distribute, publish, or otherwise use any portion of the source code.
+
+All rights not expressly granted by this license are reserved by the copyright holder.
+
+## 5. Attribution
+
+If you discuss, reference, or link to this project, you may do so without claiming ownership of the project or its source code.
+
+Attribution does **not** grant permission to use, copy, or redistribute the source code.
+
+## 6. Contributions
+
+Contributions and pull requests are not permitted unless explicitly authorized by GeckoDaily.
+
+## 7. Enforcement
+
+Any use of this source code outside the permissions explicitly granted above is unauthorized.
+
+If you wish to use any portion of the source code, you must obtain explicit written permission from GeckoDaily before doing so.
+
+## 8. Disclaimer
+
+This software is provided for viewing and educational purposes only. No permission is granted to use, copy, modify, distribute, sublicense, publish, or deploy the source code except as expressly stated in this license.
+
+**In short: You can look at the code and learn from it. You cannot use the code itself. If you want to make something similar, build it entirely yourself from scratch.**
+
+© 2026 GeckoDaily. All rights reserved.
