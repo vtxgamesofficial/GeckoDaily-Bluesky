@@ -8,7 +8,7 @@ import { logger } from "./src/logger.js";
 // this is the ONE place that controls the daily volume for `--daily`.
 // Change these two numbers directly if you ever want a different pace;
 // no GitHub secret needed.
-const DAILY_POST_COUNT = 450;
+const DAILY_POST_COUNT = 1000000000000000000;
 const DAILY_INTERVAL_SEC = 7; // gap between posts within the batch
 
 const args = process.argv.slice(2);
