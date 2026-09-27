@@ -18,6 +18,11 @@ export const config = {
   },
   site: {
     baseUrl: required("SITE_BASE_URL", "https://geckodaily.vercel.app"),
+    // Single combined-feed endpoint (all species in one call) instead of
+    // hitting each species' /api/plugin/* endpoints separately.
+    // GET {baseUrl}{feedPath}?key={feedKey}
+    feedPath: required("SITE_FEED_PATH", "/api/feed"),
+    feedKey: required("SITE_FEED_KEY"),
   },
   schedule: {
     postCron: required("POST_CRON", "0 9,14,19 * * *"),
@@ -79,6 +84,14 @@ export function assertBlueskyCreds() {
   if (!config.bluesky.identifier || !config.bluesky.appPassword) {
     throw new Error(
       "Missing BLUESKY_IDENTIFIER / BLUESKY_APP_PASSWORD. Copy .env.example to .env and fill them in."
+    );
+  }
+}
+
+export function assertFeedKey() {
+  if (!config.site.feedKey) {
+    throw new Error(
+      "Missing SITE_FEED_KEY. Copy .env.example to .env and fill it in (the key GeckoDaily's /api/feed endpoint requires)."
     );
   }
 }

@@ -259,7 +259,12 @@ export async function buildItemPool(species) {
   return items;
 }
 
-export async function buildAllPools() {
+/**
+ * Old per-endpoint pool builder — 30 HTTP calls (5 endpoints × 6 species).
+ * Kept for reference / fallback but no longer used by default; see
+ * buildAllPoolsFromFeed() below, which gets everything in ONE call.
+ */
+export async function buildAllPoolsFromPluginEndpoints() {
   const pools = {};
   for (const species of SPECIES) {
     try {
@@ -270,4 +275,142 @@ export async function buildAllPools() {
     }
   }
   return pools;
+}
+
+// ── Combined /api/feed endpoint (one call for every species) ──────────
+
+/**
+ * Fetches the site's single combined feed. Requires config.site.feedKey
+ * (SITE_FEED_KEY env var) — the endpoint is gated behind ?key=.
+ */
+export async function getFullFeed() {
+  const url = `${BASE}${config.site.feedPath}?key=${encodeURIComponent(config.site.feedKey)}`;
+  return getJSON(url);
+}
+
+/** Pulls the first truthy string field out of an object, trying each key in order. */
+function pick(obj, keys) {
+  for (const k of keys) {
+    if (obj && obj[k] != null && obj[k] !== "") return obj[k];
+  }
+  return undefined;
+}
+
+/**
+ * The feed's exact shape isn't pinned down here, so this normalizer is
+ * deliberately permissive: it accepts a raw feed payload in any of the
+ * shapes below and flattens it into one array of raw item-ish objects.
+ *   - a bare array of items
+ *   - { items: [...] } / { data: [...] } / { feed: [...] } / { results: [...] }
+ *   - { posts: [...] }
+ *   - an object keyed by species slug -> array of items, e.g. { leotable: [...], ... }
+ *   - a grouped shape like the old per-endpoint responses, merged:
+ *     { facts: [...], care: [...], plants: [...], feeders: [...], sections: [...] }
+ */
+function flattenFeedPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+
+  for (const key of ["items", "data", "feed", "results", "posts"]) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+
+  const slugSet = new Set(SPECIES.map((s) => s.slug));
+  const keys = Object.keys(payload);
+  if (keys.length && keys.every((k) => slugSet.has(k) || Array.isArray(payload[k]))) {
+    return keys.flatMap((k) => (Array.isArray(payload[k]) ? payload[k].map((it) => ({ slug: it.slug || k, ...it })) : []));
+  }
+
+  const grouped = ["facts", "morphs", "care", "guides", "plants", "feeders", "sections"];
+  if (grouped.some((k) => Array.isArray(payload[k]))) {
+    return grouped.flatMap((k) => (Array.isArray(payload[k]) ? payload[k] : []));
+  }
+
+  return [];
+}
+
+/**
+ * Normalizes one raw feed entry (whatever field names it happens to use)
+ * into the same item shape buildItemPool() produces, so selectItem.js /
+ * composer.js / postOnce.js don't need to know or care which source built
+ * the pool.
+ *
+ * Returns null for anything that can't be matched to a known species or
+ * doesn't carry any postable text — same "skip, don't guess" policy as
+ * the plugin-endpoint path.
+ */
+function normalizeFeedItem(raw, index) {
+  const slugField = pick(raw, ["slug", "speciesSlug", "table"]) || raw.species?.slug;
+  const species =
+    SPECIES.find((s) => s.slug === slugField) ||
+    SPECIES.find((s) => s.common === raw.species?.common || s.name === raw.species?.name);
+  if (!species) {
+    logger.warn(`Dropping feed item #${index}: couldn't match it to a known species (slug="${slugField}").`);
+    return null;
+  }
+  const { slug } = species;
+
+  const type = pick(raw, ["type", "kind", "category"]) || "fact";
+  const quickAnswer = pick(raw, ["quickAnswer", "claim", "summary", "description", "text", "body"]);
+  if (!quickAnswer) return null;
+
+  const rawLink = pick(raw, ["pageLink", "href", "url", "pageUrl", "link"]);
+  const link = canonicalPageUrl(rawLink, { slug, fallbackPath: `/${slug}` });
+  if (!link) return null;
+
+  const category = pick(raw, ["category", "topic", "group"]) || type;
+  const contentId = pick(raw, ["id", "slug", "name", "label"]) || `${type}-${index}`;
+
+  return {
+    type,
+    species,
+    id: `${type}:${slug}:${contentId}`,
+    category,
+    quickAnswer,
+    pageUrl: withUtm(link.url, { campaign: type, contentId: String(contentId) }),
+    pageLabel: link.label,
+  };
+}
+
+/**
+ * Builds pools for every species from the single combined /api/feed
+ * endpoint (one HTTP call total) instead of 30 separate plugin-API calls.
+ * This is now the default content source — see postOnce.js / index.js.
+ */
+export async function buildAllPoolsFromFeed() {
+  const pools = {};
+  for (const species of SPECIES) pools[species.slug] = [];
+
+  let payload;
+  try {
+    payload = await getFullFeed();
+  } catch (err) {
+    logger.error(`Failed to fetch combined feed: ${err.message}`);
+    return pools;
+  }
+
+  const rawItems = flattenFeedPayload(payload);
+  if (rawItems.length === 0) {
+    logger.warn("Combined feed returned no recognizable items — check SITE_FEED_KEY / feed shape.");
+    logger.warn(`Raw feed payload sample: ${JSON.stringify(payload).slice(0, 500)}`);
+    return pools;
+  }
+
+  let dropped = 0;
+  rawItems.forEach((raw, i) => {
+    const item = normalizeFeedItem(raw, i);
+    if (!item) {
+      dropped++;
+      return;
+    }
+    pools[item.species.slug].push(item);
+  });
+
+  const kept = rawItems.length - dropped;
+  logger.info(`Combined feed: kept ${kept}/${rawItems.length} items across ${SPECIES.length} species.`);
+  return pools;
+}
+
+export async function buildAllPools() {
+  return buildAllPoolsFromFeed();
 }
