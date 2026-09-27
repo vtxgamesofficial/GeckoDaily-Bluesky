@@ -278,102 +278,140 @@ export async function buildAllPoolsFromPluginEndpoints() {
 }
 
 // ── Combined /api/feed endpoint (one call for every species) ──────────
+//
+// This is an RSS 2.0 feed (confirmed from a real response), NOT JSON —
+// each <item> is one postable fact/care-guide/plant/feeder entry, with:
+//   <title>          human-readable headline (HTML-entity-escaped, not CDATA)
+//   <link>/<guid>     canonical page URL, e.g. https://geckodaily.vercel.app/{slug}/info/{page}
+//   <category>        "Fact" | "Care guide" | "Gut-load food" | "Feeder insect" | "Plant" | ...
+//   <description>     CDATA: "{quick answer}.\n\nSource: GeckoDaily — CC BY-NC-ND 4.0 ...license"
+//   <content:encoded>  CDATA: longer HTML version, same trailing attribution
+//
+// The feed's own <description> (channel-level) states its license as
+// CC BY-NC-ND 4.0 — free for personal/educational use, no commercial use,
+// no republishing as your own, always credit + link back — and explicitly
+// says the feed exists "for automated posting". The bot already satisfies
+// "credit + link back" structurally: assemblePost() in blueskyClient.js
+// always appends a clickable "🦎 geckodaily.vercel.app/{slug}/..." anchor
+// to every post, so every post visibly names and links to GeckoDaily. We
+// only take the short "quick answer" sentence(s) from <description>, not
+// the boilerplate license text that follows it.
 
 /**
- * Fetches the site's single combined feed. Requires config.site.feedKey
- * (SITE_FEED_KEY env var) — the endpoint is gated behind ?key=.
+ * Fetches the site's single combined feed (RSS/XML) as raw text.
+ * Requires config.site.feedKey (SITE_FEED_KEY env var) — the endpoint is
+ * gated behind ?key=.
  */
 export async function getFullFeed() {
   const url = `${BASE}${config.site.feedPath}?key=${encodeURIComponent(config.site.feedKey)}`;
-  return getJSON(url);
+  const res = await fetch(url, { headers: { Accept: "application/rss+xml, application/xml, text/xml" } });
+  const contentType = res.headers.get("content-type") || "";
+  const bodyText = await res.text();
+
+  if (!res.ok) {
+    logger.error(
+      `Feed request failed: GET ${url} -> ${res.status} ${res.statusText} (content-type: ${contentType})\nBody snippet: ${bodyText.slice(0, 1000)}`
+    );
+    throw new Error(`GET ${url} -> ${res.status}`);
+  }
+
+  if (!/<rss|<\?xml/i.test(bodyText.slice(0, 200))) {
+    logger.error(
+      `Feed returned ${res.status} but the body doesn't look like RSS/XML (content-type: ${contentType}). This usually means the URL/key is wrong.\nBody snippet: ${bodyText.slice(0, 1000)}`
+    );
+    throw new Error(`GET ${url} -> unexpected body (not RSS/XML)`);
+  }
+
+  return bodyText;
 }
 
-/** Pulls the first truthy string field out of an object, trying each key in order. */
-function pick(obj, keys) {
-  for (const k of keys) {
-    if (obj && obj[k] != null && obj[k] !== "") return obj[k];
-  }
-  return undefined;
+/** Decodes the handful of HTML/XML entities the feed actually uses. */
+function decodeEntities(str) {
+  return String(str || "")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+/** Extracts one tag's inner text from an <item> block, CDATA or plain. */
+function extractTag(itemXml, tag) {
+  const cdataRe = new RegExp(`<${tag}(?:\\s[^>]*)?><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>`);
+  const plainRe = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`);
+  const m = itemXml.match(cdataRe) || itemXml.match(plainRe);
+  return m ? m[1].trim() : undefined;
+}
+
+/** Strips the "\n\nSource: GeckoDaily — ...license" attribution tail the site appends to every description. */
+function stripAttributionTail(text) {
+  return String(text || "").split(/\n\s*\n\s*Source:/)[0].trim();
+}
+
+const CATEGORY_TYPE_MAP = {
+  fact: "fact",
+  "care guide": "care",
+  "gut-load food": "feeder",
+  "feeder insect": "feeder",
+  plant: "plant",
+  morph: "morph",
+};
+
+/** Parses the raw RSS XML into an array of { title, link, category, quickAnswer }. */
+export function parseFeedItems(xml) {
+  const blocks = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+  return blocks.map((block) => {
+    const title = decodeEntities(extractTag(block, "title"));
+    const link = decodeEntities(extractTag(block, "link"));
+    const category = decodeEntities(extractTag(block, "category"));
+    const description = decodeEntities(extractTag(block, "description"));
+    return { title, link, category, quickAnswer: stripAttributionTail(description) };
+  });
 }
 
 /**
- * The feed's exact shape isn't pinned down here, so this normalizer is
- * deliberately permissive: it accepts a raw feed payload in any of the
- * shapes below and flattens it into one array of raw item-ish objects.
- *   - a bare array of items
- *   - { items: [...] } / { data: [...] } / { feed: [...] } / { results: [...] }
- *   - { posts: [...] }
- *   - an object keyed by species slug -> array of items, e.g. { leotable: [...], ... }
- *   - a grouped shape like the old per-endpoint responses, merged:
- *     { facts: [...], care: [...], plants: [...], feeders: [...], sections: [...] }
+ * Normalizes one parsed RSS item into the same item shape
+ * buildItemPool() produces, so selectItem.js / composer.js / postOnce.js
+ * don't need to know or care which source built the pool.
  */
-function flattenFeedPayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== "object") return [];
+export function normalizeFeedItem(raw, index) {
+  if (!raw.link || !raw.quickAnswer) return null;
 
-  for (const key of ["items", "data", "feed", "results", "posts"]) {
-    if (Array.isArray(payload[key])) return payload[key];
-  }
-
-  const slugSet = new Set(SPECIES.map((s) => s.slug));
-  const keys = Object.keys(payload);
-  if (keys.length && keys.every((k) => slugSet.has(k) || Array.isArray(payload[k]))) {
-    return keys.flatMap((k) => (Array.isArray(payload[k]) ? payload[k].map((it) => ({ slug: it.slug || k, ...it })) : []));
-  }
-
-  const grouped = ["facts", "morphs", "care", "guides", "plants", "feeders", "sections"];
-  if (grouped.some((k) => Array.isArray(payload[k]))) {
-    return grouped.flatMap((k) => (Array.isArray(payload[k]) ? payload[k] : []));
-  }
-
-  return [];
-}
-
-/**
- * Normalizes one raw feed entry (whatever field names it happens to use)
- * into the same item shape buildItemPool() produces, so selectItem.js /
- * composer.js / postOnce.js don't need to know or care which source built
- * the pool.
- *
- * Returns null for anything that can't be matched to a known species or
- * doesn't carry any postable text — same "skip, don't guess" policy as
- * the plugin-endpoint path.
- */
-function normalizeFeedItem(raw, index) {
-  const slugField = pick(raw, ["slug", "speciesSlug", "table"]) || raw.species?.slug;
-  const species =
-    SPECIES.find((s) => s.slug === slugField) ||
-    SPECIES.find((s) => s.common === raw.species?.common || s.name === raw.species?.name);
-  if (!species) {
-    logger.warn(`Dropping feed item #${index}: couldn't match it to a known species (slug="${slugField}").`);
+  let slug;
+  try {
+    slug = new URL(raw.link, BASE_ORIGIN).pathname.split("/").filter(Boolean)[0];
+  } catch {
     return null;
   }
-  const { slug } = species;
+  const species = SPECIES.find((s) => s.slug === slug);
+  if (!species) {
+    logger.warn(`Dropping feed item #${index} ("${raw.title}"): unrecognized species slug "${slug}".`);
+    return null;
+  }
 
-  const type = pick(raw, ["type", "kind", "category"]) || "fact";
-  const quickAnswer = pick(raw, ["quickAnswer", "claim", "summary", "description", "text", "body"]);
-  if (!quickAnswer) return null;
+  const type = CATEGORY_TYPE_MAP[(raw.category || "").toLowerCase().trim()] || "section";
 
-  const rawLink = pick(raw, ["pageLink", "href", "url", "pageUrl", "link"]);
-  const link = canonicalPageUrl(rawLink, { slug, fallbackPath: `/${slug}` });
+  const link = canonicalPageUrl(raw.link, { slug, fallbackPath: `/${slug}` });
   if (!link) return null;
 
-  const category = pick(raw, ["category", "topic", "group"]) || type;
-  const contentId = pick(raw, ["id", "slug", "name", "label"]) || `${type}-${index}`;
+  const contentId = link.url.split("/").filter(Boolean).pop() || `item-${index}`;
+  const category = raw.category || type;
 
   return {
     type,
     species,
     id: `${type}:${slug}:${contentId}`,
     category,
-    quickAnswer,
-    pageUrl: withUtm(link.url, { campaign: type, contentId: String(contentId) }),
+    quickAnswer: raw.quickAnswer,
+    pageUrl: withUtm(link.url, { campaign: type, contentId }),
     pageLabel: link.label,
   };
 }
 
 /**
- * Builds pools for every species from the single combined /api/feed
+ * Builds pools for every species from the single combined /api/feed RSS
  * endpoint (one HTTP call total) instead of 30 separate plugin-API calls.
  * This is now the default content source — see postOnce.js / index.js.
  */
@@ -381,18 +419,17 @@ export async function buildAllPoolsFromFeed() {
   const pools = {};
   for (const species of SPECIES) pools[species.slug] = [];
 
-  let payload;
+  let xml;
   try {
-    payload = await getFullFeed();
+    xml = await getFullFeed();
   } catch (err) {
     logger.error(`Failed to fetch combined feed: ${err.message}`);
     return pools;
   }
 
-  const rawItems = flattenFeedPayload(payload);
+  const rawItems = parseFeedItems(xml);
   if (rawItems.length === 0) {
-    logger.warn("Combined feed returned no recognizable items — check SITE_FEED_KEY / feed shape.");
-    logger.warn(`Raw feed payload sample: ${JSON.stringify(payload).slice(0, 500)}`);
+    logger.warn("Combined feed parsed to zero <item> entries — check SITE_FEED_KEY / feed contents.");
     return pools;
   }
 
