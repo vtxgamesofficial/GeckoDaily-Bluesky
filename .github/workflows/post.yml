@@ -1,17 +1,14 @@
 name: GeckoDaily Bluesky bot
 
 on:
+  # Start automatically every 5 minutes.
+  # The concurrency lock prevents a second bot from starting
+  # while the previous one is still running.
   schedule:
-    # Runs once a day and posts the whole day's batch back-to-back
-    # (count + per-post delay are hardcoded in index.js as DAILY_POST_COUNT /
-    # DAILY_INTERVAL_SEC — no extra GitHub secret needed). 450 posts at a
-    # 5s gap takes ~40min of API/Cloudflare-AI time plus network latency,
-    # comfortably inside GitHub's 6h job limit.
-    - cron: "0 9 * * *"
-  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+    - cron: "*/5 * * * *"
 
-# Stops a second run from starting (and fighting over the state.json commit)
-# if a manual trigger overlaps with the schedule, or a run overruns.
+  workflow_dispatch: {}
+
 concurrency:
   group: geckodaily-post
   cancel-in-progress: false
@@ -19,13 +16,12 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    # GitHub's hard cap for hosted runners — a 450-post batch should finish
-    # in well under an hour, but this is a safety net, not the pacing.
-    timeout-minutes: 180
-    # Pulls in the secrets you added under this named Environment
-    # (Settings → Environments → geckodaily). If you ever move the 4
-    # secrets to plain repository secrets instead, you can delete this line.
+
+    # Let one bot session run for up to 6 hours.
+    timeout-minutes: 360
+
     environment: geckodaily
+
     steps:
       - uses: actions/checkout@v4
 
@@ -33,27 +29,24 @@ jobs:
         with:
           node-version: "20"
 
-      - run: npm install
+      - name: Install dependencies
+        run: npm install
 
-      - name: Post today's batch to Bluesky
+      - name: Run GeckoDaily Bluesky bot
         env:
           BLUESKY_IDENTIFIER: ${{ secrets.BLUESKY_IDENTIFIER }}
           BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
           SITE_BASE_URL: https://geckodaily.vercel.app
         run: node index.js --daily
 
-      # Persist data/state.json (posted-item log) back to the repo so the
-      # bot remembers what it already posted between runs. Actions runners
-      # are ephemeral — without this, the bot would forget its history
-      # every single run and could repeat itself.
-      # if: always() — postBatch saves state.json every 20 posts as it goes,
-      # so even if the batch step above errors out partway through 450
-      # posts, whatever it already posted is still committed, not lost.
       - name: Commit updated state
         if: always()
         run: |
           git config user.name "geckodaily-bot"
           git config user.email "actions@users.noreply.github.com"
+
           git add data/state.json
+
           git diff --cached --quiet || git commit -m "chore: update bot state [skip ci]"
+
           git push
