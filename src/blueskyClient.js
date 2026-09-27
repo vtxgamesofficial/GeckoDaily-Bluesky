@@ -1,6 +1,9 @@
 import { BskyAgent } from "@atproto/api";
 import { config, assertBlueskyCreds } from "./config.js";
 import { logger } from "./logger.js";
+import { graphemeLength, truncateToGraphemes } from "./composer.js";
+
+const BSKY_MAX_GRAPHEMES = 300;
 
 const encoder = new TextEncoder();
 function byteLen(str) {
@@ -48,11 +51,35 @@ export function buildFacets(fullText, { linkText, linkUrl, hashtags = [] }) {
   return facets;
 }
 
-/** Assembles the final post text + facets from a composed body and item metadata. */
+/**
+ * Assembles the final post text + facets from a composed body and item
+ * metadata. Enforces Bluesky's real 300-*grapheme* hard limit here (not
+ * in composer.js), because only here do we know the full text — the
+ * anchor line's length varies a lot depending on the page's URL path
+ * (short vs. deeply-nested pages), and hashtags add more on top. If body
+ * + anchor + hashtags would exceed 300 graphemes, the body gets trimmed
+ * to fit — never the anchor/link or hashtags, since those are short and
+ * fixed-purpose (attribution + discoverability).
+ */
 export function assemblePost({ body, pageUrl, pageLabel, hashtags }) {
   const anchor = `🦎 ${pageLabel}`;
   const tagLine = hashtags.length ? ` ${hashtags.join(" ")}` : "";
-  const text = `${body}\n\n${anchor}${tagLine}`;
+  const fixedTail = `\n\n${anchor}${tagLine}`;
+  const fixedLen = graphemeLength(fixedTail);
+
+  const budget = BSKY_MAX_GRAPHEMES - fixedLen;
+  let finalBody = body;
+  if (budget < 1) {
+    // Anchor + hashtags alone (rare: an extremely long page path) already
+    // eat the whole budget. Drop hashtags first before giving up on body.
+    logger.warn(`Anchor+hashtags alone are ${fixedLen} graphemes — dropping hashtags to make room.`);
+    return assemblePost({ body, pageUrl, pageLabel, hashtags: [] });
+  }
+  if (graphemeLength(body) > budget) {
+    finalBody = truncateToGraphemes(body, budget);
+  }
+
+  const text = `${finalBody}${fixedTail}`;
   const facets = buildFacets(text, { linkText: anchor, linkUrl: pageUrl, hashtags });
   return { text, facets };
 }
