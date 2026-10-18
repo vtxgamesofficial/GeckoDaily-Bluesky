@@ -1,0 +1,42 @@
+name: GeckoDaily Bluesky bot — LIKE EXISTING POSTS
+
+# Likes every post already on the bot's account that it hasn't liked yet.
+# New posts are liked automatically by the posting workflow, so this is only
+# for the backlog. It never writes data/state.json, so it can't clash with
+# the posting workflow's commits.
+on:
+  workflow_dispatch:
+    inputs:
+      max_likes:
+        description: 'Max new likes this run (Bluesky rate-limits writes, so keep it sensible).'
+        required: false
+        default: '1000'
+  # Remove this block if you only want to run it by hand.
+  schedule:
+    - cron: "23 */6 * * *"
+
+# Separate group from the posting workflow so neither blocks the other.
+concurrency:
+  group: geckodaily-like-existing
+  cancel-in-progress: false
+
+jobs:
+  like-existing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: geckodaily
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install
+
+      - name: Like existing posts
+        env:
+          BLUESKY_IDENTIFIER: ${{ secrets.BLUESKY_IDENTIFIER }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+        run: node index.js --like-existing --max=${{ github.event.inputs.max_likes || '500' }}

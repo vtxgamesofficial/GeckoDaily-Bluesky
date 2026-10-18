@@ -9,6 +9,8 @@
   "scripts": {
     "post": "node index.js --once",
     "post:dry": "node index.js --once --dry",
+    "like-existing": "node index.js --like-existing",
+    "like-existing:dry": "node index.js --like-existing --dry",
     "engage": "node index.js --engage",
     "engage:dry": "node index.js --engage --dry",
     "schedule": "node index.js --schedule"

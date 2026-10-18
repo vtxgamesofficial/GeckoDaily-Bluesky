@@ -33,6 +33,8 @@ export const config = {
     enabled: /^true$/i.test(required("ENGAGE_ENABLED", "false")),
     maxLikes: parseInt(required("ENGAGE_MAX_LIKES", "5"), 10),
   },
+  // When true (default), the bot likes every post it publishes.
+  likeOwnPosts: !/^false$/i.test(required("LIKE_OWN_POSTS", "true")),
   logLevel: required("LOG_LEVEL", "info"),
 };
 

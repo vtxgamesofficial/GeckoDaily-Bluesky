@@ -2,7 +2,8 @@ import { buildAllPools, verifyLinkLive } from "./contentSource.js";
 import { loadState, saveState, markPosted, isNearDuplicate } from "./state.js";
 import { selectItem } from "./selectItem.js";
 import { composeBody, pickHashtags } from "./composer.js";
-import { assemblePost, publishPost } from "./blueskyClient.js";
+import { assemblePost, publishPost, likePost } from "./blueskyClient.js";
+import { config } from "./config.js";
 import { logger } from "./logger.js";
 
 function sleep(ms) {
@@ -59,14 +60,27 @@ async function postOneFromPools(pools, state, { dry = false } = {}) {
     if (dry) {
       logger.info("[DRY RUN] Would post:\n" + text);
     } else {
-      await publishWithRetry({ text, facets });
+      const published = await publishWithRetry({ text, facets });
       logger.info("Posted to Bluesky:\n" + text);
+      await likeOwnPost(published);
     }
 
     markPosted(state, item.id, text);
     return { posted: true, text, item: item.id };
   }
   return { posted: false, reason: "no valid item after retries" };
+}
+
+/** Likes the post we just published. Never throws — a failed like must not
+ * count as a failed post or abort a batch. */
+async function likeOwnPost(published) {
+  if (!config.likeOwnPosts || !published?.uri || !published?.cid) return;
+  try {
+    await likePost({ uri: published.uri, cid: published.cid });
+    logger.info(`Liked own post ${published.uri}`);
+  } catch (err) {
+    logger.warn(`Posted, but failed to like own post ${published.uri}:`, err.message);
+  }
 }
 
 /** publishPost wrapped with a small retry/backoff so one flaky network

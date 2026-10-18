@@ -107,7 +107,16 @@ export async function publishPost({ text, facets }) {
     facets,
     createdAt: new Date().toISOString(),
   };
-  return agent.post(record);
+  return agent.post(record); // resolves to { uri, cid }
+}
+
+/**
+ * Likes a post by uri + cid. Used to have the bot like its own freshly
+ * published posts, and by the "like existing posts" backfill.
+ */
+export async function likePost({ uri, cid }) {
+  const agent = await getAgent();
+  return agent.like(uri, cid);
 }
 
 /**

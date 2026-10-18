@@ -2,6 +2,7 @@ import { postOnce, postBatch } from "./src/postOnce.js";
 import { engageOnce } from "./src/engagement.js";
 import { startScheduler } from "./src/scheduler.js";
 import { deleteAllPosts } from "./src/deleteAllPosts.js";
+import { likeExistingPosts } from "./src/likeExisting.js";
 import { logger } from "./src/logger.js";
 
 // Hardcoded here on purpose (per request) instead of an env var/secret —
@@ -41,6 +42,8 @@ Usage:
   node index.js --purge-all-posts --dry         Preview EVERY post currently on the account (no deletes)
   node index.js --purge-all-posts --yes-delete-everything
                                                  Actually delete every post on the account. Irreversible.
+  node index.js --like-existing                Like every post on the account that isn't liked yet
+  node index.js --like-existing --max=500      ...but stop after 500 new likes (use --dry to preview)
   node index.js --engage                      Run one engagement (safe-liking) pass
   node index.js --engage --dry                Show what the engagement pass would search for
   node index.js --schedule                    Run forever, posting/engaging on a fixed cron schedule instead of a loop
@@ -67,6 +70,13 @@ async function main() {
     }
     const { total, deleted, failed } = await deleteAllPosts({ dry });
     logger.info(`Purge finished. total=${total} deleted=${deleted} failed=${failed}`);
+    return;
+  }
+
+  if (args.includes("--like-existing")) {
+    const max = getFlagValue("max", Infinity);
+    const { scanned, liked, alreadyLiked, failed } = await likeExistingPosts({ dry, max });
+    logger.info(`Like-existing finished. scanned=${scanned} liked=${liked} alreadyLiked=${alreadyLiked} failed=${failed}`);
     return;
   }
 
