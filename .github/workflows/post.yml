@@ -36,7 +36,7 @@ jobs:
         env:
           BLUESKY_IDENTIFIER: ${{ secrets.BLUESKY_IDENTIFIER }}
           BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
-          SITE_BASE_URL: https://geckodaily.vercel.app
+          SITE_BASE_URL: https://geckodaily.cc.cd
           SITE_FEED_KEY: ${{ secrets.SITE_FEED_KEY }}
         run: node index.js --daily
 
