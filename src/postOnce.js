@@ -29,7 +29,11 @@ async function postOneFromPools(pools, state, { dry = false } = {}) {
     // spend anything else on it. Catches stale/garbage links that made it
     // past the domain/path sanity check in contentSource.js (e.g. a path
     // that matches /{slug}/... shape but the specific page was removed).
-    const linkLive = await verifyLinkLive(item.pageUrl);
+    // Off by default: every check is a live request to the website (and the
+    // old vercel.app host 308-redirects, so it was TWO edge requests per
+    // check). Items come from the site's own feed, so the links are already
+    // trusted. Set VERIFY_LINKS=true to re-enable.
+    const linkLive = process.env.VERIFY_LINKS === "true" ? await verifyLinkLive(item.pageUrl) : true;
     if (!linkLive) {
       logger.warn(`Skipping item ${item.id} — link did not resolve: ${item.pageUrl}`);
       markPosted(state, item.id, ""); // don't keep retrying the same dead link
