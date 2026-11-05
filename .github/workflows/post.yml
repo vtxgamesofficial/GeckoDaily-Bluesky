@@ -1,3 +1,6 @@
+
+sadas
+
 name: GeckoDaily Bluesky bot
 
 on:
@@ -21,17 +24,17 @@ jobs:
     timeout-minutes: 360
 
     environment: geckodaily
-
+asd
     steps:
       - uses: actions/checkout@v4
-
+sad
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
+asd
       - name: Install dependencies
         run: npm install
-
+asd
       - name: Run GeckoDaily Bluesky bot
         env:
           BLUESKY_IDENTIFIER: ${{ secrets.BLUESKY_IDENTIFIER }}
@@ -39,7 +42,7 @@ jobs:
           SITE_BASE_URL: https://geckodaily.cc.cd
           SITE_FEED_KEY: ${{ secrets.SITE_FEED_KEY }}
         run: node index.js --daily
-
+asda
       - name: Commit updated state
         if: always()
         run: |
